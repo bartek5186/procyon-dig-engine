@@ -116,7 +116,8 @@ Response includes:
 - `total` total number of matched products,
 - `total_pages` total pages for current `per_page`,
 - `search_mode` (`fulltext` or `like_fallback`),
-- `fallback_limited` and `fallback_limit` when fallback is used.
+- `fallback_limited` and `fallback_limit` when fallback is used,
+- in `facets[*]`: `term_id`, `slug`, `name`, `term_link`, `count`.
 
 Fallback behavior:
 
@@ -140,6 +141,48 @@ Examples:
 curl "https://your-domain.com/wp-json/procyon-dig/v1/search?q=wine"
 curl "https://your-domain.com/wp-json/procyon-dig/v1/search?q=riesling&tax[grape_varieties]=riesling&facets=1"
 curl "https://your-domain.com/wp-json/procyon-dig/v1/search?q=whisky&include_products=0"
+```
+
+### Advanced Facet Example
+
+Request focused on facets only:
+
+```bash
+curl -G "https://your-domain.com/wp-json/procyon-dig/v1/search" \
+  --data-urlencode "q=riesling" \
+  --data-urlencode "include_products=0" \
+  --data-urlencode "facets=1" \
+  --data-urlencode "facet_taxonomies=grape_varieties,regions,pa_color"
+```
+
+Sample response (trimmed):
+
+```json
+{
+  "q": "riesling",
+  "total": 42,
+  "search_mode": "fulltext",
+  "facets": {
+    "grape_varieties": [
+      {
+        "term_id": 123,
+        "slug": "riesling",
+        "name": "Riesling",
+        "term_link": "https://your-domain.com/grape_varieties/riesling/",
+        "count": 31
+      }
+    ]
+  }
+}
+```
+
+Render clickable facet chips:
+
+```js
+const chips = (response.facets?.grape_varieties ?? []).map((f) => ({
+  label: `${f.name} (${f.count})`,
+  href: f.term_link ?? `/shop/?s=riesling&tax[grape_varieties]=${encodeURIComponent(f.slug)}`
+}));
 ```
 
 ## WP-CLI

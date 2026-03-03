@@ -614,9 +614,15 @@ class Indexer {
             if (is_wp_error($terms) || !is_array($terms)) continue;
 
             foreach ($terms as $term) {
+                $term_link = get_term_link($term);
+                if (is_wp_error($term_link) || !is_string($term_link)) {
+                    $term_link = null;
+                }
+
                 $term_map[$tax][(int)$term->term_id] = [
                     'slug' => $term->slug,
                     'name' => $term->name,
+                    'term_link' => $term_link,
                 ];
             }
         }
@@ -634,6 +640,7 @@ class Indexer {
                 'term_id' => $term_id,
                 'slug' => $term_map[$tax][$term_id]['slug'],
                 'name' => $term_map[$tax][$term_id]['name'],
+                'term_link' => $term_map[$tax][$term_id]['term_link'],
                 'count' => $cnt,
             ];
         }

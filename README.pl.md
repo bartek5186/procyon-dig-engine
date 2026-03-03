@@ -116,7 +116,8 @@ Odpowiedź zawiera też:
 - `total` całkowitą liczbę dopasowanych produktów,
 - `total_pages` liczbę stron dla bieżącego `per_page`,
 - `search_mode` (`fulltext` lub `like_fallback`),
-- `fallback_limited` i `fallback_limit` gdy zadziała fallback.
+- `fallback_limited` i `fallback_limit` gdy zadziała fallback,
+- w `facets[*]`: `term_id`, `slug`, `name`, `term_link`, `count`.
 
 Zachowanie fallbacku:
 
@@ -140,6 +141,48 @@ Przykłady:
 curl "https://twoja-domena.pl/wp-json/procyon-dig/v1/search?q=wino"
 curl "https://twoja-domena.pl/wp-json/procyon-dig/v1/search?q=riesling&tax[grape_varieties]=riesling&facets=1"
 curl "https://twoja-domena.pl/wp-json/procyon-dig/v1/search?q=whisky&include_products=0"
+```
+
+### Zaawansowany Przykład Facetów
+
+Zapytanie nastawione tylko na facety:
+
+```bash
+curl -G "https://twoja-domena.pl/wp-json/procyon-dig/v1/search" \
+  --data-urlencode "q=riesling" \
+  --data-urlencode "include_products=0" \
+  --data-urlencode "facets=1" \
+  --data-urlencode "facet_taxonomies=grape_varieties,regions,pa_color"
+```
+
+Przykładowa odpowiedź (skrócona):
+
+```json
+{
+  "q": "riesling",
+  "total": 42,
+  "search_mode": "fulltext",
+  "facets": {
+    "grape_varieties": [
+      {
+        "term_id": 123,
+        "slug": "riesling",
+        "name": "Riesling",
+        "term_link": "https://twoja-domena.pl/grape_varieties/riesling/",
+        "count": 31
+      }
+    ]
+  }
+}
+```
+
+Renderowanie klikalnych chipów facetów:
+
+```js
+const chips = (response.facets?.grape_varieties ?? []).map((f) => ({
+  label: `${f.name} (${f.count})`,
+  href: f.term_link ?? `/sklep/?s=riesling&tax[grape_varieties]=${encodeURIComponent(f.slug)}`
+}));
 ```
 
 ## WP-CLI
