@@ -230,3 +230,9 @@ After the initial full reindex, updates are automatic:
 - Query result cache is enabled via transients (default TTL: `120s`), configurable with filter `procyon_dig_cache_ttl`.
 - If REST returns 404, make sure plugin is active and permalinks were refreshed.
 - If results are empty after migration/import, run full reindex.
+
+## License
+
+This project is open-source and licensed under **GNU GPL v2 or later** (`GPL-2.0-or-later`).
+
+See [LICENSE](./LICENSE).

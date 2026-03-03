@@ -4,6 +4,8 @@
  * Description: Fast WooCommerce product search using dedicated FULLTEXT index + taxonomy mapping for filters/facets + REST API + WP-CLI.
  * Version: 0.2.0
  * Requires PHP: 7.4
+ * License: GPL-2.0-or-later
+ * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Author: bartek5186
  */
 
