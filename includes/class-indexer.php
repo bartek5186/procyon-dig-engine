@@ -4,6 +4,8 @@ namespace Procyon\DigEngine;
 if (!defined('ABSPATH')) exit;
 
 class Indexer {
+    private const CACHE_TTL_SECONDS = 120;
+    private const LIKE_FALLBACK_LIMIT = 20;
 
     public static function table_search(): string {
         global $wpdb;
@@ -13,6 +15,23 @@ class Indexer {
     public static function table_terms(): string {
         global $wpdb;
         return $wpdb->prefix . 'procyon_dig_terms';
+    }
+
+    private static function cache_ttl(): int {
+        $ttl = (int) apply_filters('procyon_dig_cache_ttl', self::CACHE_TTL_SECONDS);
+        return max(10, $ttl);
+    }
+
+    private static function cache_key(string $bucket, array $payload): string {
+        return 'procyon_dig_' . $bucket . '_' . md5((string) wp_json_encode($payload));
+    }
+
+    private static function cache_get(string $bucket, array $payload) {
+        return get_transient(self::cache_key($bucket, $payload));
+    }
+
+    private static function cache_set(string $bucket, array $payload, $value): void {
+        set_transient(self::cache_key($bucket, $payload), $value, self::cache_ttl());
     }
 
     /**
@@ -30,7 +49,7 @@ class Indexer {
 
         $product_taxes = get_object_taxonomies('product', 'names');
         foreach ($product_taxes as $t) {
-            if (str_starts_with($t, 'pa_')) $base[] = $t;
+            if (strpos($t, 'pa_') === 0) $base[] = $t;
         }
 
         $taxes = array_values(array_unique(array_filter(array_merge($base, $opt), 'is_string')));
@@ -89,6 +108,7 @@ class Indexer {
 
         add_action('updated_postmeta', [__CLASS__, 'on_postmeta_change'], 20, 4);
         add_action('added_postmeta', [__CLASS__, 'on_postmeta_change'], 20, 4);
+        add_action('deleted_postmeta', [__CLASS__, 'on_postmeta_change'], 20, 4);
 
         add_action('set_object_terms', [__CLASS__, 'on_set_object_terms'], 20, 6);
     }
@@ -237,8 +257,97 @@ class Indexer {
     public static function to_boolean_query(string $q): string {
         $terms = array_filter(explode(' ', $q), fn($t) => $t !== '');
         $terms = array_values(array_filter($terms, fn($t) => mb_strlen($t) >= 2));
-        if (!$terms) return $q;
+        if (!$terms) return '';
         return implode(' ', array_map(fn($t) => '+' . $t . '*', $terms));
+    }
+
+    private static function like_fallback_tokens(string $q): array {
+        $q = self::sanitize_query($q);
+        if ($q === '') return [];
+
+        $tokens = array_values(array_unique(array_filter(
+            explode(' ', $q),
+            fn($t) => $t !== '' && mb_strlen($t) >= 2
+        )));
+        if (!$tokens) return [];
+
+        $has_long_token = (bool) array_filter($tokens, fn($t) => mb_strlen($t) >= 4);
+        if (!$has_long_token) return [];
+
+        return $tokens;
+    }
+
+    public static function can_use_like_fallback(string $q): bool {
+        return self::like_fallback_tokens($q) !== [];
+    }
+
+    public static function like_fallback_limit(): int {
+        return self::LIKE_FALLBACK_LIMIT;
+    }
+
+    private static function normalize_tax_filters(array $tax_filters): array {
+        $allowed = self::allowed_taxonomies();
+        $out = [];
+
+        foreach ($tax_filters as $taxonomy => $term_ids) {
+            if (!is_string($taxonomy) || !in_array($taxonomy, $allowed, true)) continue;
+            if (!is_array($term_ids)) continue;
+
+            $ids = array_values(array_unique(array_map('intval', $term_ids)));
+            $ids = array_values(array_filter($ids, fn($tid) => $tid > 0));
+            sort($ids, SORT_NUMERIC);
+
+            if ($ids) $out[$taxonomy] = $ids;
+        }
+
+        ksort($out, SORT_STRING);
+        return $out;
+    }
+
+    private static function build_tax_filter_exists_sql(array $tax_filters, string $alias = 's'): array {
+        $tax_filters = self::normalize_tax_filters($tax_filters);
+        $sql = '';
+        $params = [];
+        $t_terms = self::table_terms();
+
+        $i = 0;
+        foreach ($tax_filters as $taxonomy => $term_ids) {
+            $placeholders = implode(',', array_fill(0, count($term_ids), '%d'));
+            $sql .= " AND EXISTS (
+                SELECT 1 FROM {$t_terms} t{$i}
+                WHERE t{$i}.product_id = {$alias}.product_id
+                  AND t{$i}.taxonomy = %s
+                  AND t{$i}.term_id IN ({$placeholders})
+            )";
+
+            $params[] = $taxonomy;
+            foreach ($term_ids as $tid) $params[] = $tid;
+            $i++;
+        }
+
+        return [$sql, $params];
+    }
+
+    private static function build_search_context(string $q, array $tax_filters): ?array {
+        $q = self::sanitize_query($q);
+        if ($q === '') return null;
+
+        $boolean = self::to_boolean_query($q);
+        if ($boolean === '') return null;
+
+        [$where, $params] = self::build_search_where($boolean, $tax_filters);
+        return [$boolean, $where, $params];
+    }
+
+    private static function build_search_where(string $boolean, array $tax_filters): array {
+        $where = "WHERE MATCH(s.searchable) AGAINST (%s IN BOOLEAN MODE)";
+        $params = [$boolean];
+
+        [$tax_sql, $tax_params] = self::build_tax_filter_exists_sql($tax_filters, 's');
+        $where .= $tax_sql;
+        $params = array_merge($params, $tax_params);
+
+        return [$where, $params];
     }
 
     /**
@@ -296,38 +405,25 @@ class Indexer {
      * returns: [product_id => score]
      */
     public static function search_ids(string $q, int $page = 1, int $per_page = 12, array $tax_filters = []): array {
-        $q = self::sanitize_query($q);
-        if ($q === '') return [];
-
         $page = max(1, $page);
         $per_page = min(max(1, $per_page), 50);
         $offset = ($page - 1) * $per_page;
 
-        $boolean = self::to_boolean_query($q);
+        $ctx = self::build_search_context($q, $tax_filters);
+        if (!$ctx) return [];
+        [$boolean, $where, $params] = $ctx;
+
+        $cache_payload = [
+            'boolean' => $boolean,
+            'tax_filters' => self::normalize_tax_filters($tax_filters),
+            'page' => $page,
+            'per_page' => $per_page,
+        ];
+        $cached = self::cache_get('search_ids', $cache_payload);
+        if ($cached !== false && is_array($cached)) return $cached;
 
         global $wpdb;
         $t_search = self::table_search();
-        $t_terms  = self::table_terms();
-
-        $where = "WHERE MATCH(s.searchable) AGAINST (%s IN BOOLEAN MODE)";
-        $params = [$boolean];
-
-        $i = 0;
-        foreach ($tax_filters as $taxonomy => $term_ids) {
-            if (!$term_ids) continue;
-
-            $placeholders = implode(',', array_fill(0, count($term_ids), '%d'));
-            $where .= " AND EXISTS (
-                SELECT 1 FROM {$t_terms} t{$i}
-                WHERE t{$i}.product_id = s.product_id
-                  AND t{$i}.taxonomy = %s
-                  AND t{$i}.term_id IN ({$placeholders})
-            )";
-
-            $params[] = $taxonomy;
-            foreach ($term_ids as $tid) $params[] = (int)$tid;
-            $i++;
-        }
 
         $sql = $wpdb->prepare(
             "SELECT s.product_id,
@@ -340,12 +436,206 @@ class Indexer {
         );
 
         $rows = $wpdb->get_results($sql, ARRAY_A);
-        if (!$rows) return [];
+        if (!$rows) {
+            self::cache_set('search_ids', $cache_payload, []);
+            return [];
+        }
 
         $out = [];
         foreach ($rows as $r) {
             $out[(int)$r['product_id']] = (float)$r['score'];
         }
+        self::cache_set('search_ids', $cache_payload, $out);
+        return $out;
+    }
+
+    public static function search_total(string $q, array $tax_filters = []): int {
+        $ctx = self::build_search_context($q, $tax_filters);
+        if (!$ctx) return 0;
+        [$boolean, $where, $params] = $ctx;
+
+        $cache_payload = [
+            'boolean' => $boolean,
+            'tax_filters' => self::normalize_tax_filters($tax_filters),
+        ];
+        $cached = self::cache_get('search_total', $cache_payload);
+        if ($cached !== false) return (int)$cached;
+
+        global $wpdb;
+        $t_search = self::table_search();
+
+        $sql = $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$t_search} s {$where}",
+            ...$params
+        );
+
+        $total = (int) $wpdb->get_var($sql);
+        self::cache_set('search_total', $cache_payload, $total);
+        return $total;
+    }
+
+    private static function normalize_facet_taxonomies(array $facet_taxonomies): array {
+        $allowed = self::allowed_taxonomies();
+        return array_values(array_unique(array_filter(
+            $facet_taxonomies,
+            fn($t) => is_string($t) && in_array($t, $allowed, true)
+        )));
+    }
+
+    private static function hydrate_facet_rows(array $rows): array {
+        if (!$rows) return [];
+
+        $term_ids_by_tax = [];
+        foreach ($rows as $r) {
+            $tax = (string)$r['taxonomy'];
+            $term_id = (int)$r['term_id'];
+            if ($tax === '' || $term_id <= 0) continue;
+
+            if (!isset($term_ids_by_tax[$tax])) $term_ids_by_tax[$tax] = [];
+            $term_ids_by_tax[$tax][] = $term_id;
+        }
+
+        $term_map = [];
+        foreach ($term_ids_by_tax as $tax => $ids) {
+            $ids = array_values(array_unique($ids));
+            if (!$ids) continue;
+
+            $terms = get_terms([
+                'taxonomy' => $tax,
+                'hide_empty' => false,
+                'include' => $ids,
+            ]);
+            if (is_wp_error($terms) || !is_array($terms)) continue;
+
+            foreach ($terms as $term) {
+                $term_map[$tax][(int)$term->term_id] = [
+                    'slug' => $term->slug,
+                    'name' => $term->name,
+                ];
+            }
+        }
+
+        $out = [];
+        foreach ($rows as $r) {
+            $tax = (string)$r['taxonomy'];
+            $term_id = (int)$r['term_id'];
+            $cnt = (int)$r['cnt'];
+
+            if (!isset($term_map[$tax][$term_id])) continue;
+
+            if (!isset($out[$tax])) $out[$tax] = [];
+            $out[$tax][] = [
+                'term_id' => $term_id,
+                'slug' => $term_map[$tax][$term_id]['slug'],
+                'name' => $term_map[$tax][$term_id]['name'],
+                'count' => $cnt,
+            ];
+        }
+
+        return $out;
+    }
+
+    public static function facets_for_query(string $q, array $tax_filters, array $facet_taxonomies): array {
+        $facet_taxonomies = self::normalize_facet_taxonomies($facet_taxonomies);
+        if (!$facet_taxonomies) return [];
+
+        $ctx = self::build_search_context($q, $tax_filters);
+        if (!$ctx) return [];
+        [$boolean, $where, $params] = $ctx;
+
+        $cache_payload = [
+            'boolean' => $boolean,
+            'tax_filters' => self::normalize_tax_filters($tax_filters),
+            'facet_taxonomies' => $facet_taxonomies,
+        ];
+        $cached = self::cache_get('facets_for_query', $cache_payload);
+        if ($cached !== false && is_array($cached)) return $cached;
+
+        global $wpdb;
+        $t_terms = self::table_terms();
+        $t_search = self::table_search();
+
+        $ph_tax = implode(',', array_fill(0, count($facet_taxonomies), '%s'));
+
+        $sql = $wpdb->prepare(
+            "SELECT tm.taxonomy, tm.term_id, COUNT(*) AS cnt
+             FROM {$t_terms} tm
+             INNER JOIN (
+                SELECT s.product_id
+                FROM {$t_search} s
+                {$where}
+             ) matched ON matched.product_id = tm.product_id
+             WHERE tm.taxonomy IN ({$ph_tax})
+             GROUP BY tm.taxonomy, tm.term_id
+             ORDER BY tm.taxonomy ASC, cnt DESC",
+            ...array_merge($params, $facet_taxonomies)
+        );
+
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        $out = self::hydrate_facet_rows($rows);
+        self::cache_set('facets_for_query', $cache_payload, $out);
+        return $out;
+    }
+
+    /**
+     * Returns fallback results for substring matching on searchable text.
+     * Used only as controlled fallback when FULLTEXT yields no rows.
+     *
+     * @return array<int,float> [product_id => score]
+     */
+    public static function search_ids_like_fallback(string $q, array $tax_filters = [], int $limit = self::LIKE_FALLBACK_LIMIT): array {
+        $tokens = self::like_fallback_tokens($q);
+        if (!$tokens) return [];
+
+        $limit = min(max(1, $limit), self::LIKE_FALLBACK_LIMIT);
+        $norm_filters = self::normalize_tax_filters($tax_filters);
+
+        $cache_payload = [
+            'tokens' => $tokens,
+            'tax_filters' => $norm_filters,
+            'limit' => $limit,
+        ];
+        $cached = self::cache_get('search_ids_like_fallback', $cache_payload);
+        if ($cached !== false && is_array($cached)) return $cached;
+
+        global $wpdb;
+        $t_search = self::table_search();
+
+        $like_sql_parts = [];
+        $params = [];
+        foreach ($tokens as $token) {
+            $like_sql_parts[] = "s.searchable LIKE %s";
+            $params[] = '%' . $wpdb->esc_like($token) . '%';
+        }
+
+        if (!$like_sql_parts) return [];
+
+        $where = 'WHERE ' . implode(' AND ', $like_sql_parts);
+        [$tax_sql, $tax_params] = self::build_tax_filter_exists_sql($norm_filters, 's');
+        $where .= $tax_sql;
+        $params = array_merge($params, $tax_params);
+
+        $sql = $wpdb->prepare(
+            "SELECT s.product_id
+             FROM {$t_search} s
+             {$where}
+             ORDER BY s.updated_at DESC
+             LIMIT %d",
+            ...array_merge($params, [$limit])
+        );
+
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        if (!$rows) {
+            self::cache_set('search_ids_like_fallback', $cache_payload, []);
+            return [];
+        }
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[(int)$r['product_id']] = 0.0;
+        }
+
+        self::cache_set('search_ids_like_fallback', $cache_payload, $out);
         return $out;
     }
 
@@ -353,11 +643,7 @@ class Indexer {
         $product_ids = array_values(array_unique(array_map('intval', $product_ids)));
         if (!$product_ids) return [];
 
-        $allowed = self::allowed_taxonomies();
-        $facet_taxonomies = array_values(array_unique(array_filter(
-            $facet_taxonomies,
-            fn($t) => is_string($t) && in_array($t, $allowed, true)
-        )));
+        $facet_taxonomies = self::normalize_facet_taxonomies($facet_taxonomies);
         if (!$facet_taxonomies) return [];
 
         $product_ids = array_slice($product_ids, 0, 500);
@@ -380,27 +666,7 @@ class Indexer {
         );
 
         $rows = $wpdb->get_results($sql, ARRAY_A);
-        if (!$rows) return [];
-
-        $out = [];
-        foreach ($rows as $r) {
-            $tax = (string)$r['taxonomy'];
-            $term_id = (int)$r['term_id'];
-            $cnt = (int)$r['cnt'];
-
-            $term = get_term($term_id, $tax);
-            if (!$term || is_wp_error($term)) continue;
-
-            if (!isset($out[$tax])) $out[$tax] = [];
-            $out[$tax][] = [
-                'term_id' => $term_id,
-                'slug' => $term->slug,
-                'name' => $term->name,
-                'count' => $cnt,
-            ];
-        }
-
-        return $out;
+        return self::hydrate_facet_rows($rows);
     }
 
     public static function count_indexed(): int {

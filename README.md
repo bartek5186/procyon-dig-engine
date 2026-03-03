@@ -13,6 +13,7 @@ High-performance WooCommerce product search powered by dedicated FULLTEXT and ta
 ## Requirements
 
 - WordPress with WooCommerce active,
+- PHP 7.4+,
 - MySQL/MariaDB with InnoDB FULLTEXT support,
 - WP-CLI for `procyon dig` commands.
 
@@ -61,6 +62,8 @@ add_filter('procyon_dig_taxonomies', function(array $taxes) {
 
 `GET /wp-json/procyon-dig/v1/status`
 
+Requires authenticated user with `manage_options`.
+
 Returns, among others:
 
 - `version`,
@@ -80,8 +83,23 @@ Parameters:
 - `per_page` (default `12`, max `50`),
 - `include_products` (default `true`),
 - `tax` taxonomy filters, e.g. `tax[grape_varieties]=riesling,chardonnay`,
-- `facets` (default `false`) include facet response,
+- `facets` (default `false`) include facet response (calculated from the full matched set, not only current page),
 - `facet_taxonomies` CSV list of taxonomies for facets; if empty, all allowed taxonomies are used.
+
+Response includes:
+
+- `total` total number of matched products,
+- `total_pages` total pages for current `per_page`,
+- `search_mode` (`fulltext` or `like_fallback`),
+- `fallback_limited` and `fallback_limit` when fallback is used.
+
+Fallback behavior:
+
+- runs only when FULLTEXT returns 0 results,
+- uses substring matching (`LIKE`) with small capped limit,
+- requires at least one token with length `>= 4`,
+- works only for first page (`page=1`),
+- disables facets (returns empty `facets` in fallback mode).
 
 Examples:
 
@@ -105,7 +123,7 @@ wp procyon dig reindex --batch=200 --truncate=1
 
 ## Database Tables
 
-The plugin creates these tables on activation:
+The plugin creates these tables on activation and auto-upgrades them when the table version changes:
 
 - `${prefix}procyon_dig_search`
 - `${prefix}procyon_dig_terms`
@@ -126,12 +144,13 @@ The plugin creates these tables on activation:
 After the initial full reindex, updates are automatic:
 
 - `save_post_product` -> reindex product,
-- `updated_postmeta` / `added_postmeta` for `_sku` -> reindex product,
+- `updated_postmeta` / `added_postmeta` / `deleted_postmeta` for `_sku` -> reindex product,
 - `set_object_terms` for allowed taxonomies -> reindex term map and product,
 - `before_delete_post` -> remove product from both tables.
 
 ## Notes
 
 - Search uses BOOLEAN FULLTEXT mode (`+term*`).
+- Query result cache is enabled via transients (default TTL: `120s`), configurable with filter `procyon_dig_cache_ttl`.
 - If REST returns 404, make sure plugin is active and permalinks were refreshed.
 - If results are empty after migration/import, run full reindex.

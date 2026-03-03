@@ -3,6 +3,7 @@
  * Plugin Name: Procyon Dig Engine
  * Description: Fast WooCommerce product search using dedicated FULLTEXT index + taxonomy mapping for filters/facets + REST API + WP-CLI.
  * Version: 0.2.0
+ * Requires PHP: 7.4
  * Author: bartek5186
  */
 
@@ -21,6 +22,11 @@ register_activation_hook(__FILE__, function () {
 });
 
 add_action('plugins_loaded', function () {
+    $table_version = (string) get_option('procyon_dig_table_version', '');
+    if ($table_version !== PROCYON_DIG_TABLE_VERSION) {
+        \Procyon\DigEngine\Indexer::install_tables();
+    }
+
     \Procyon\DigEngine\Rest::init();
     \Procyon\DigEngine\Indexer::init_hooks();
 
