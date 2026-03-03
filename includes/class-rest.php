@@ -50,7 +50,9 @@ class Rest {
             'indexed' => Indexer::count_indexed(),
             'table_search' => Indexer::table_search(),
             'table_terms' => Indexer::table_terms(),
+            'index_fields' => Indexer::index_fields(),
             'taxonomies' => Indexer::allowed_taxonomies(),
+            'woo_search_replacement' => (bool) get_option('procyon_dig_replace_wc_search', false),
         ];
     }
 

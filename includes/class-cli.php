@@ -15,7 +15,9 @@ class Cli {
         \WP_CLI::log('Search table: ' . Indexer::table_search());
         \WP_CLI::log('Terms table: ' . Indexer::table_terms());
         \WP_CLI::log('Indexed rows: ' . Indexer::count_indexed());
+        \WP_CLI::log('Index fields: ' . implode(', ', Indexer::index_fields()));
         \WP_CLI::log('Taxonomies: ' . implode(', ', Indexer::allowed_taxonomies()));
+        \WP_CLI::log('Woo search replacement: ' . ((bool)get_option('procyon_dig_replace_wc_search', false) ? 'enabled' : 'disabled'));
     }
 
     /**

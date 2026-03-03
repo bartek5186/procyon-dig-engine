@@ -20,19 +20,25 @@ High-performance WooCommerce product search powered by dedicated FULLTEXT and ta
 ## Quick Start
 
 1. Activate the plugin.
-2. Optionally add custom product taxonomies to the whitelist:
+2. Configure plugin in **Settings -> Procyon Dig Engine**:
+
+- searchable fields (title/excerpt/content/SKU/term names),
+- additional custom product taxonomies to index,
+- optional WooCommerce search replacement toggle.
+
+3. Optionally add custom product taxonomies from CLI:
 
 ```bash
 wp option set procyon_dig_taxonomies '["grape_varieties","regions"]' --format=json
 ```
 
-3. Build the initial index:
+4. Build the initial index:
 
 ```bash
 wp procyon dig reindex --batch=200 --truncate=1
 ```
 
-4. Check status:
+5. Check status:
 
 ```bash
 wp procyon dig status
@@ -45,6 +51,14 @@ The plugin indexes only product taxonomies:
 - default: `product_cat`, `product_tag`, all `pa_*`,
 - additional: values from `procyon_dig_taxonomies` option (array),
 - additional: values from `procyon_dig_taxonomies` filter.
+
+## Admin Settings
+
+`Settings -> Procyon Dig Engine`
+
+- choose searchable fields used to build the FULLTEXT text,
+- choose additional custom product taxonomies (defaults are always included),
+- enable/disable replacing WooCommerce product search.
 
 Filter example:
 
@@ -70,7 +84,9 @@ Returns, among others:
 - `indexed`,
 - `table_search`,
 - `table_terms`,
-- `taxonomies`.
+- `index_fields`,
+- `taxonomies`,
+- `woo_search_replacement`.
 
 ### Search Endpoint
 
@@ -100,6 +116,14 @@ Fallback behavior:
 - requires at least one token with length `>= 4`,
 - works only for first page (`page=1`),
 - disables facets (returns empty `facets` in fallback mode).
+
+WooCommerce replacement behavior:
+
+- applies only to main frontend product search query,
+- keeps native Woo search when ordering is unsupported (`price`, `rating`, `popularity`, etc.),
+- keeps native Woo search when full result candidate set is too broad (safety cap),
+- uses `post__in` relevance order from Procyon index.
+- safety cap can be tuned via filter `procyon_dig_woo_max_candidate_ids` (default `2000`).
 
 Examples:
 

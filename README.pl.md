@@ -20,19 +20,25 @@ Wydajna wyszukiwarka produktów WooCommerce oparta o dedykowane tabele indeksuj�
 ## Szybki start
 
 1. Aktywuj plugin.
-2. Opcjonalnie dodaj własne taxonomie produktów do whitelisty:
+2. Skonfiguruj plugin w **Ustawienia -> Procyon Dig Engine**:
+
+- pola używane do budowy indeksu (title/excerpt/content/SKU/nazwy termów),
+- dodatkowe custom taxonomie produktów do indeksowania,
+- opcjonalny przełącznik zastąpienia wyszukiwarki WooCommerce.
+
+3. Opcjonalnie ustaw custom taxonomie przez CLI:
 
 ```bash
 wp option set procyon_dig_taxonomies '["grape_varieties","regions"]' --format=json
 ```
 
-3. Zbuduj początkowy indeks:
+4. Zbuduj początkowy indeks:
 
 ```bash
 wp procyon dig reindex --batch=200 --truncate=1
 ```
 
-4. Sprawdź status:
+5. Sprawdź status:
 
 ```bash
 wp procyon dig status
@@ -45,6 +51,14 @@ Plugin indeksuje wyłącznie taxonomie produktów:
 - domyślnie: `product_cat`, `product_tag`, wszystkie `pa_*`,
 - dodatkowo: wartości z opcji `procyon_dig_taxonomies` (tablica),
 - dodatkowo: wartości z filtra `procyon_dig_taxonomies`.
+
+## Ustawienia w panelu
+
+`Ustawienia -> Procyon Dig Engine`
+
+- wybór pól budujących tekst FULLTEXT,
+- wybór dodatkowych custom taxonomii produktów (domyślne są zawsze aktywne),
+- włączenie/wyłączenie zastąpienia wyszukiwarki produktów WooCommerce.
 
 Przykład filtra:
 
@@ -70,7 +84,9 @@ Zwraca m.in.:
 - `indexed`,
 - `table_search`,
 - `table_terms`,
-- `taxonomies`.
+- `index_fields`,
+- `taxonomies`,
+- `woo_search_replacement`.
 
 ### Endpoint wyszukiwania
 
@@ -100,6 +116,14 @@ Zachowanie fallbacku:
 - wymaga co najmniej jednego tokena o długości `>= 4`,
 - działa tylko dla pierwszej strony (`page=1`),
 - wyłącza facety (w trybie fallback zwraca puste `facets`).
+
+Zachowanie przy zastąpieniu wyszukiwarki WooCommerce:
+
+- działa tylko dla głównego frontowego search query produktów,
+- przy nieobsługiwanym sortowaniu (`price`, `rating`, `popularity` itd.) zostaje natywna wyszukiwarka Woo,
+- przy zbyt szerokim zapytaniu (limit bezpieczeństwa kandydatów) zostaje natywna wyszukiwarka Woo,
+- kolejność wyników opiera się o relevance z Procyon (`post__in`).
+- limit bezpieczeństwa można regulować filtrem `procyon_dig_woo_max_candidate_ids` (domyślnie `2000`).
 
 Przykłady:
 

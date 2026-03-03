@@ -6,6 +6,7 @@ if (!defined('ABSPATH')) exit;
 class Indexer {
     private const CACHE_TTL_SECONDS = 120;
     private const LIKE_FALLBACK_LIMIT = 20;
+    private const DEFAULT_INDEX_FIELDS = ['title', 'excerpt', 'content', 'sku', 'terms'];
 
     public static function table_search(): string {
         global $wpdb;
@@ -32,6 +33,46 @@ class Indexer {
 
     private static function cache_set(string $bucket, array $payload, $value): void {
         set_transient(self::cache_key($bucket, $payload), $value, self::cache_ttl());
+    }
+
+    public static function available_index_fields(): array {
+        return [
+            'title' => 'Product title',
+            'excerpt' => 'Short description (excerpt)',
+            'content' => 'Long description (content)',
+            'sku' => 'SKU',
+            'terms' => 'Term names',
+        ];
+    }
+
+    public static function default_index_fields(): array {
+        return self::DEFAULT_INDEX_FIELDS;
+    }
+
+    public static function normalize_index_fields($fields): array {
+        if (!is_array($fields)) {
+            $fields = self::default_index_fields();
+        }
+
+        $allowed = array_keys(self::available_index_fields());
+        $allowed_map = array_fill_keys($allowed, true);
+
+        $out = [];
+        foreach ($fields as $f) {
+            if (!is_scalar($f)) continue;
+            $key = sanitize_key((string)$f);
+            if (!isset($allowed_map[$key])) continue;
+            $out[] = $key;
+        }
+
+        $out = array_values(array_unique($out));
+        if (!$out) return ['title'];
+
+        return $out;
+    }
+
+    public static function index_fields(): array {
+        return self::normalize_index_fields(get_option('procyon_dig_index_fields', self::default_index_fields()));
     }
 
     /**
@@ -220,16 +261,25 @@ class Indexer {
     public static function build_searchable_text(int $product_id): string {
         $post = get_post($product_id);
         $parts = [];
+        $fields = array_fill_keys(self::index_fields(), true);
 
-        $parts[] = $post->post_title ?? '';
-        $parts[] = $post->post_excerpt ?? '';
-        $parts[] = wp_strip_all_tags($post->post_content ?? '');
-
-        $sku = get_post_meta($product_id, '_sku', true);
-        if (is_string($sku) && $sku !== '') $parts[] = $sku;
-
-        foreach (self::allowed_taxonomies() as $tax) {
-            $parts[] = self::terms_text($product_id, $tax);
+        if (isset($fields['title'])) {
+            $parts[] = $post->post_title ?? '';
+        }
+        if (isset($fields['excerpt'])) {
+            $parts[] = $post->post_excerpt ?? '';
+        }
+        if (isset($fields['content'])) {
+            $parts[] = wp_strip_all_tags($post->post_content ?? '');
+        }
+        if (isset($fields['sku'])) {
+            $sku = get_post_meta($product_id, '_sku', true);
+            if (is_string($sku) && $sku !== '') $parts[] = $sku;
+        }
+        if (isset($fields['terms'])) {
+            foreach (self::allowed_taxonomies() as $tax) {
+                $parts[] = self::terms_text($product_id, $tax);
+            }
         }
 
         $text = implode(' ', array_filter($parts));
@@ -447,6 +497,62 @@ class Indexer {
         }
         self::cache_set('search_ids', $cache_payload, $out);
         return $out;
+    }
+
+    /**
+     * Returns sorted IDs for the whole result set, capped by $max_results.
+     * Returns null when match count exceeds the cap.
+     *
+     * @return int[]|null
+     */
+    public static function search_all_ids(string $q, array $tax_filters = [], int $max_results = 2000): ?array {
+        $max_results = min(max(100, $max_results), 10000);
+
+        $ctx = self::build_search_context($q, $tax_filters);
+        if (!$ctx) return [];
+        [$boolean, $where, $params] = $ctx;
+
+        $cache_payload = [
+            'boolean' => $boolean,
+            'tax_filters' => self::normalize_tax_filters($tax_filters),
+            'max_results' => $max_results,
+        ];
+        $cached = self::cache_get('search_all_ids', $cache_payload);
+        if (is_array($cached) && isset($cached['status'])) {
+            if ($cached['status'] === 'overflow') return null;
+            if ($cached['status'] === 'ok' && isset($cached['ids']) && is_array($cached['ids'])) {
+                return array_values(array_map('intval', $cached['ids']));
+            }
+        }
+
+        global $wpdb;
+        $t_search = self::table_search();
+        $limit = $max_results + 1;
+
+        $sql = $wpdb->prepare(
+            "SELECT s.product_id,
+                    MATCH(s.searchable) AGAINST (%s IN BOOLEAN MODE) AS score
+             FROM {$t_search} s
+             {$where}
+             ORDER BY score DESC, s.updated_at DESC
+             LIMIT %d",
+            ...array_merge([$boolean], $params, [$limit])
+        );
+
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        if (!$rows) {
+            self::cache_set('search_all_ids', $cache_payload, ['status' => 'ok', 'ids' => []]);
+            return [];
+        }
+
+        if (count($rows) > $max_results) {
+            self::cache_set('search_all_ids', $cache_payload, ['status' => 'overflow']);
+            return null;
+        }
+
+        $ids = array_values(array_map(fn($r) => (int)$r['product_id'], $rows));
+        self::cache_set('search_all_ids', $cache_payload, ['status' => 'ok', 'ids' => $ids]);
+        return $ids;
     }
 
     public static function search_total(string $q, array $tax_filters = []): int {

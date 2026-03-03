@@ -16,6 +16,8 @@ define('PROCYON_DIG_TABLE_VERSION', '2');
 require_once PROCYON_DIG_PATH . 'includes/class-indexer.php';
 require_once PROCYON_DIG_PATH . 'includes/class-rest.php';
 require_once PROCYON_DIG_PATH . 'includes/class-cli.php';
+require_once PROCYON_DIG_PATH . 'includes/class-settings.php';
+require_once PROCYON_DIG_PATH . 'includes/class-woo-search.php';
 
 register_activation_hook(__FILE__, function () {
     \Procyon\DigEngine\Indexer::install_tables();
@@ -29,6 +31,8 @@ add_action('plugins_loaded', function () {
 
     \Procyon\DigEngine\Rest::init();
     \Procyon\DigEngine\Indexer::init_hooks();
+    \Procyon\DigEngine\Settings::init();
+    \Procyon\DigEngine\WooSearch::init();
 
     if (defined('WP_CLI') && WP_CLI) {
         \Procyon\DigEngine\Cli::register();
