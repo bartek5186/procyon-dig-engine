@@ -6,6 +6,11 @@ if (!defined('ABSPATH')) exit;
 class Settings {
     private const OPTION_GROUP = 'procyon_dig_settings';
     private const PAGE_SLUG = 'procyon-dig-engine';
+    private const HIDDEN_TECHNICAL_TAXONOMIES = [
+        'product_type',
+        'product_visibility',
+        'pos_product_visibility',
+    ];
 
     public static function init(): void {
         if (!is_admin()) return;
@@ -73,11 +78,16 @@ class Settings {
         $all = get_object_taxonomies('product', 'objects');
         if (!is_array($all)) return [];
 
+        $hidden = apply_filters('procyon_dig_hidden_custom_taxonomies', self::HIDDEN_TECHNICAL_TAXONOMIES);
+        if (!is_array($hidden)) $hidden = self::HIDDEN_TECHNICAL_TAXONOMIES;
+        $hidden_map = array_fill_keys(array_map('strval', $hidden), true);
+
         $out = [];
         foreach ($all as $taxonomy => $obj) {
             if (!is_string($taxonomy)) continue;
             if ($taxonomy === 'product_cat' || $taxonomy === 'product_tag') continue;
             if (strpos($taxonomy, 'pa_') === 0) continue;
+            if (isset($hidden_map[$taxonomy])) continue;
 
             $label = isset($obj->labels->singular_name) && is_string($obj->labels->singular_name)
                 ? $obj->labels->singular_name

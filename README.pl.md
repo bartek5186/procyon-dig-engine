@@ -1,3 +1,12 @@
+<p align="center">
+  <img src="./procyon-logotype.png" alt="Procyon Dig Engine" width="360" />
+</p>
+
+<p align="center">
+  <em>"You see, in this world, there's two kinds of people, my friend: those with loaded guns and those who dig. You dig"</em><br />
+  - Clint Eastwood, <em>The Good, The Bad, and The Ugly</em>
+</p>
+
 # Procyon Dig Engine
 
 Wydajna wyszukiwarka produktów WooCommerce oparta o dedykowane tabele indeksujące FULLTEXT i relacje taxonomii.
