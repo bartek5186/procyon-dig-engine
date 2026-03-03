@@ -231,6 +231,12 @@ Po pierwszym pełnym reindexie aktualizacje są automatyczne:
 - Jeśli REST zwraca 404, upewnij się, że plugin jest aktywny i odświeżono permalinki.
 - Jeśli po migracji/importach wyniki są puste, uruchom pełny reindex.
 
+## Przykład Użycia
+
+<p align="center">
+  <img src="./example_in_use.png" alt="Procyon Dig Engine - przykład użycia" width="960" />
+</p>
+
 ## Licencja
 
 Ten projekt jest open-source i jest licencjonowany na zasadach **GNU GPL v2 lub nowsza** (`GPL-2.0-or-later`).
